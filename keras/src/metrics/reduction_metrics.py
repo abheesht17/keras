@@ -150,8 +150,13 @@ class Mean(Metric):
 
     def reset_state(self):
         try:
-            device_list = self.total._layout.sharding.mesh.devices
-            print(f"--- DEBUG: Metric {self.name} layout mesh devices: {device_list} ---", flush=True)
+            # device_list = self.total._layout.sharding.mesh.devices
+            a1 = self.total._layout._device_assignment
+            a2 = self.total._layout._internal_device_list
+            a3 = self.total._layout._logical_device_ids
+            a4 = self.total._layout.device_set
+            a5 = self.total._layout.mesh
+            print(f"--- DEBUG: Metric {self.name} layout mesh devices: {a1}, {a2}, {a3}, {a4}, {a5} ---", flush=True)
         except:
             print(f"--- DEBUG: Metric {self.name} layout is: {self.total._layout} ---", flush=True)
             print(dir(self.total._layout))
