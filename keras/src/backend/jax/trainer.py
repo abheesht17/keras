@@ -426,7 +426,7 @@ class JAXTrainer(base_trainer.Trainer):
         initial_epoch = self._initial_epoch or initial_epoch
         try:
             for epoch in range(initial_epoch, epochs):
-                self.reset_metrics()
+                # self.reset_metrics()
                 callbacks.on_epoch_begin(epoch)
 
                 self._jax_state_synced = True
