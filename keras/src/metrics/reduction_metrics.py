@@ -154,6 +154,7 @@ class Mean(Metric):
             print(f"--- DEBUG: Metric {self.name} layout mesh devices: {device_list} ---", flush=True)
         except:
             print(f"--- DEBUG: Metric {self.name} layout is: {self.total._layout} ---", flush=True)
+            print(dir(self.total._layout))
             pass
         self.total.assign(0)
         self.count.assign(0)
