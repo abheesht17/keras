@@ -273,6 +273,7 @@ class Trainer:
 
     def reset_metrics(self):
         for m in self.metrics:
+            print(f"Resetting metric: {m.name}")
             m.reset_state()
 
     def _get_own_metrics(self):
