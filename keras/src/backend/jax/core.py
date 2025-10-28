@@ -48,7 +48,7 @@ class JaxVariable(KerasVariable):
 
     def _direct_assign(self, value):
         if self._layout is not None:
-            print(f"backend/jax/core.py _direct_assign() {self._layout=}")
+            # print(f"backend/jax/core.py _direct_assign() {self._layout=}")
             value = distribution_lib.distribute_variable(value, self._layout)
         self._value = value
 

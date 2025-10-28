@@ -89,7 +89,7 @@ def distribute_tensor(tensor, layout):
             if current_layout == layout:
                 return tensor
 
-    print(f"KERAS distribute_tensor(): {layout=}")
+    # print(f"KERAS distribute_tensor(): {layout=}")
     return jax.device_put(tensor, layout)
 
 
