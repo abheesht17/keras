@@ -149,7 +149,10 @@ class Mean(Metric):
         self.count.assign_add(ops.cast(num_samples, dtype=self.dtype))
 
     def reset_state(self):
-        print(f"{self.total.shape=}")
+        try:
+            print(f"--- DEBUG: Metric {self.name} layout is: {self.total._layout} ---", flush=True)
+        except:
+            pass
         self.total.assign(0)
         self.count.assign(0)
 
