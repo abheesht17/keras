@@ -149,6 +149,7 @@ class Mean(Metric):
         self.count.assign_add(ops.cast(num_samples, dtype=self.dtype))
 
     def reset_state(self):
+        print(f"{self.total.shape=}")
         self.total.assign(0)
         self.count.assign(0)
 
