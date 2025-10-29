@@ -88,8 +88,6 @@ def distribute_tensor(tensor, layout):
             current_layout = getattr(tensor, "format", None)
             if current_layout == layout:
                 return tensor
-
-    print(f"--- DEBUG distribute_tensor(): {layout=}")
     return jax.device_put(tensor, layout)
 
 
