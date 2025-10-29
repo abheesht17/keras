@@ -992,7 +992,7 @@ class JAXEpochIterator(EpochIterator):
     def _get_iterator(self):
         distribution = distribution_lib.distribution()
         if distribution is not None:
-            return self._get_distributed_iterator(distribution)
+            return self._prefetch_numpy_iterator(self._get_distributed_iterator(distribution))
         if self.data_adapter.builtin_prefetch:
             return self.data_adapter.get_jax_iterator()
         else:
