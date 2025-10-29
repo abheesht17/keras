@@ -366,6 +366,7 @@ class JAXTrainer(base_trainer.Trainer):
         validation_batch_size=None,
         validation_freq=1,
     ):
+        print("USING KERAS FORK")
         self._assert_compile_called("fit")
         # Possibly cap epochs for debugging runs.
         max_epochs = config.max_epochs()
@@ -1002,7 +1003,7 @@ class JAXEpochIterator(EpochIterator):
     def _get_distributed_iterator(self, distribution):
         """Lazily compute layouts to reduce host to device transfer latency."""
         layouts = None
-        for data in self.data_adapter.get_jax_iterator():
+        for data in self._prefetch_numpy_iterator(self.data_adapter.get_jax_iterator()):
             if layouts is None:
                 layouts = tree.map_structure(
                     lambda d: distribution.get_data_layout(
