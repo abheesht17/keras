@@ -249,16 +249,16 @@ def get_jax_iterator(iterable):
 
     def convert_to_jax_compatible(x):
         if isinstance(x, (jax.Array, jax_sparse.JAXSparse, np.ndarray)):
-            print("---> jax.Array, JAXSparse, np.ndarray")
+            # print("---> jax.Array, JAXSparse, np.ndarray")
             return x
         elif is_scipy_sparse(x):
-            print("---> SciPy Sparse")
+            # print("---> SciPy Sparse")
             return scipy_sparse_to_jax_sparse(x)
         elif is_tensorflow_sparse(x):
-            print("---> TF Sparse")
+            # print("---> TF Sparse")
             return tf_sparse_to_jax_sparse(x)
         else:
-            print("---> ELSE")
+            # print("---> ELSE")
             return np.asarray(x)
 
     for batch in iterable:
