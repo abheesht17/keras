@@ -982,6 +982,7 @@ def _distribute_data(data, layouts=None):
     distribution = distribution_lib.distribution()
 
     if distribution is not None:
+        print(f"--->{distribution=}")
         if layouts is None:
             layouts = tree.map_structure(
                 lambda d: distribution.get_data_layout(d.shape),
