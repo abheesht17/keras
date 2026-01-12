@@ -1015,6 +1015,7 @@ class JAXEpochIterator(EpochIterator):
 
     def _get_distributed_iterator(self, distribution):
         """Lazily compute layouts to reduce host to device transfer latency."""
+        print("--->Enter _get_distributed_iterator")
         layouts = None
         for data in self.data_adapter.get_jax_iterator():
             if layouts is None:
