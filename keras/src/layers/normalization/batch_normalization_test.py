@@ -3,6 +3,7 @@ import pytest
 from absl.testing import parameterized
 
 from keras.src import backend
+from keras.src import initializers
 from keras.src import layers
 from keras.src import ops
 from keras.src import testing
@@ -239,3 +240,226 @@ class BatchNormalizationTest(testing.TestCase):
 
         self.assertAllClose(layer.moving_mean, ops.ones((4,)), atol=1e-6)
         self.assertAllClose(layer.moving_variance, ops.zeros((4,)), atol=1e-6)
+
+    @pytest.mark.requires_trainable_backend
+    def test_renorm_basics(self):
+        # Test basic renorm functionality
+        self.run_layer_test(
+            layers.BatchNormalization,
+            init_kwargs={
+                "center": True,
+                "scale": True,
+                "renorm": True,
+            },
+            call_kwargs={"training": True},
+            input_shape=(2, 3),
+            expected_output_shape=(2, 3),
+            expected_num_trainable_weights=2,
+            # moving_mean, moving_variance, moving_stddev, renorm_mean,
+            # renorm_stddev
+            expected_num_non_trainable_weights=5,
+            expected_num_seed_generators=0,
+            expected_num_losses=0,
+            supports_masking=True,
+        )
+        # Test renorm with clipping
+        self.run_layer_test(
+            layers.BatchNormalization,
+            init_kwargs={
+                "center": True,
+                "scale": True,
+                "renorm": True,
+                "renorm_clipping": {"rmax": 3.0, "rmin": 0.3, "dmax": 5.0},
+            },
+            call_kwargs={"training": True},
+            input_shape=(2, 4, 4, 3),
+            expected_output_shape=(2, 4, 4, 3),
+            expected_num_trainable_weights=2,
+            expected_num_non_trainable_weights=5,
+            expected_num_seed_generators=0,
+            expected_num_losses=0,
+            supports_masking=True,
+        )
+
+    def test_renorm_invalid_clipping_keys(self):
+        with self.assertRaisesRegex(ValueError, "Received invalid keys"):
+            layers.BatchNormalization(
+                renorm=True, renorm_clipping={"invalid_key": 1.0}
+            )
+
+    def test_renorm_config_serialization(self):
+        layer = layers.BatchNormalization(
+            renorm=True,
+            renorm_clipping={"rmax": 3.0, "rmin": 0.3, "dmax": 5.0},
+            renorm_momentum=0.95,
+        )
+        config = layer.get_config()
+        self.assertEqual(config["renorm"], True)
+        self.assertEqual(
+            config["renorm_clipping"], {"rmax": 3.0, "rmin": 0.3, "dmax": 5.0}
+        )
+        self.assertEqual(config["renorm_momentum"], 0.95)
+
+        # Test that we can recreate the layer from config
+        new_layer = layers.BatchNormalization.from_config(config)
+        self.assertEqual(new_layer.renorm, True)
+        self.assertEqual(
+            new_layer.renorm_clipping, {"rmax": 3.0, "rmin": 0.3, "dmax": 5.0}
+        )
+        self.assertEqual(new_layer.renorm_momentum, 0.95)
+
+    def test_renorm_variables_created(self):
+        layer = layers.BatchNormalization(renorm=True)
+        layer.build((None, 10))
+
+        # Check renorm-specific variables are created
+        self.assertTrue(hasattr(layer, "moving_stddev"))
+        self.assertTrue(hasattr(layer, "renorm_mean"))
+        self.assertTrue(hasattr(layer, "renorm_stddev"))
+
+        # Check shapes
+        self.assertEqual(layer.moving_stddev.shape, (10,))
+        self.assertEqual(layer.renorm_mean.shape, (10,))
+        self.assertEqual(layer.renorm_stddev.shape, (10,))
+
+        # Non-renorm layer should not have these variables
+        layer_no_renorm = layers.BatchNormalization(renorm=False)
+        layer_no_renorm.build((None, 10))
+        self.assertFalse(hasattr(layer_no_renorm, "moving_stddev"))
+        self.assertFalse(hasattr(layer_no_renorm, "renorm_mean"))
+        self.assertFalse(hasattr(layer_no_renorm, "renorm_stddev"))
+
+    @parameterized.product(
+        axis=(-1, 1),
+        input_shape=((5, 2, 3), (5, 3, 3, 2)),
+    )
+    def test_renorm_correctness(self, axis, input_shape):
+        # Training with renorm
+        # Note: With renorm, output = (normalized * r + d) * gamma + beta
+        # where r and d are correction factors. So the output won't have
+        # exactly zero mean and unit variance like regular batch norm.
+        layer = layers.BatchNormalization(
+            axis=axis,
+            momentum=0.0,
+            renorm=True,
+            renorm_momentum=0.0,
+        )
+        # Random data centered on 5.0, variance 10.0
+        x = np.random.normal(loc=5.0, scale=10.0, size=input_shape)
+
+        # Call multiple times with the same input
+        for _ in range(3):
+            out = layer(x, training=True)
+
+        # Verify output shape is correct
+        self.assertEqual(out.shape, input_shape)
+
+        # Verify output is valid (not NaN or Inf)
+        out_np = backend.convert_to_numpy(out)
+        self.assertFalse(np.any(np.isnan(out_np)))
+        self.assertFalse(np.any(np.isinf(out_np)))
+
+        # Verify moving statistics have been updated (since momentum=0)
+        # Moving mean should be close to the input batch mean
+        reduction_axes = list(range(len(input_shape)))
+        del reduction_axes[axis]
+        reduction_axes = tuple(reduction_axes)
+        x_np = np.array(x)
+        expected_input_mean = np.mean(x_np, axis=reduction_axes)
+        expected_input_var = np.var(x_np, axis=reduction_axes)
+        self.assertAllClose(
+            layer.moving_mean, expected_input_mean, atol=1e-3
+        )
+        self.assertAllClose(
+            layer.moving_variance, expected_input_var, atol=1e-1
+        )
+
+        # Since momentum is zero, inference after training should use
+        # the latest moving statistics
+        training_out = layer(x, training=True)
+        inference_out = layer(x, training=False)
+        self.assertAllClose(inference_out, training_out, atol=1e-4)
+
+    def test_renorm_clipping_effect(self):
+        # Test that clipping is applied correctly
+        layer = layers.BatchNormalization(
+            renorm=True,
+            renorm_clipping={"rmax": 1.5, "rmin": 0.5, "dmax": 0.5},
+            momentum=0.0,
+            renorm_momentum=0.99,  # High momentum to keep renorm stats stable
+        )
+        layer.build((None, 3))
+
+        # Create data with high variance to trigger clipping
+        x = np.array([[0.0, 50.0, -50.0], [100.0, -50.0, 50.0]], dtype="float32")
+
+        # First call to initialize
+        _ = layer(x, training=True)
+
+        # The output should be valid (not NaN or Inf) due to clipping
+        out = layer(x, training=True)
+        out_np = backend.convert_to_numpy(out)
+        self.assertFalse(np.any(np.isnan(out_np)))
+        self.assertFalse(np.any(np.isinf(out_np)))
+
+    def test_renorm_inference_same_as_regular_bn(self):
+        # During inference, renorm should behave the same as regular BN
+        # (using moving_mean and moving_variance)
+        layer_renorm = layers.BatchNormalization(
+            renorm=True,
+            momentum=0.0,
+        )
+        layer_regular = layers.BatchNormalization(
+            renorm=False,
+            momentum=0.0,
+        )
+
+        x = np.random.normal(size=(4, 10)).astype("float32")
+
+        # Build and set same moving stats
+        layer_renorm.build((None, 10))
+        layer_regular.build((None, 10))
+
+        # Train both to update moving stats
+        _ = layer_renorm(x, training=True)
+        _ = layer_regular(x, training=True)
+
+        # Copy moving stats from regular to renorm
+        layer_renorm.moving_mean.assign(layer_regular.moving_mean)
+        layer_renorm.moving_variance.assign(layer_regular.moving_variance)
+        layer_renorm.gamma.assign(layer_regular.gamma)
+        layer_renorm.beta.assign(layer_regular.beta)
+
+        # Inference should be the same
+        out_renorm = layer_renorm(x, training=False)
+        out_regular = layer_regular(x, training=False)
+
+        self.assertAllClose(out_renorm, out_regular, atol=1e-5)
+
+    def test_renorm_stddev_initializer(self):
+        # Test that moving_stddev and renorm_stddev are initialized as
+        # sqrt of moving_variance_initializer
+        layer = layers.BatchNormalization(
+            renorm=True,
+            moving_variance_initializer="ones",  # sqrt(1) = 1
+        )
+        layer.build((None, 10))
+
+        # With variance initializer = ones, stddev should be 1.0
+        self.assertAllClose(layer.moving_stddev, np.ones((10,)), atol=1e-6)
+        self.assertAllClose(layer.renorm_stddev, np.ones((10,)), atol=1e-6)
+
+        # Test with a different variance initializer (constant 4.0)
+        # sqrt(4) = 2
+        layer2 = layers.BatchNormalization(
+            renorm=True,
+            moving_variance_initializer=initializers.Constant(4.0),
+        )
+        layer2.build((None, 5))
+
+        self.assertAllClose(
+            layer2.moving_stddev, np.full((5,), 2.0), atol=1e-6
+        )
+        self.assertAllClose(
+            layer2.renorm_stddev, np.full((5,), 2.0), atol=1e-6
+        )
