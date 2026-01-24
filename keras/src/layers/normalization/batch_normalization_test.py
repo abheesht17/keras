@@ -330,58 +330,125 @@ class BatchNormalizationTest(testing.TestCase):
         self.assertFalse(hasattr(layer_no_renorm, "renorm_stddev"))
 
     def test_renorm_correctness(self):
-        # Test the key renorm behavior: on the first call with initial
-        # renorm stats (mean=0, stddev=1), the r and d corrections should
-        # "undo" the normalization, so output ≈ input.
-        #
-        # Math: output = (x - batch_mean) / batch_stddev * r + d
-        #       where r = batch_stddev / renorm_stddev
-        #             d = (batch_mean - renorm_mean) / renorm_stddev
-        # With initial renorm_mean=0, renorm_stddev=1:
-        #       r = batch_stddev, d = batch_mean
-        #       output = (x - batch_mean) / batch_stddev * batch_stddev
-        #                + batch_mean
-        #              = x - batch_mean + batch_mean = x
+        # Comprehensive test with custom initializers that manually computes
+        # the expected output and verifies all moving statistics updates.
+        epsilon = 1e-3
+        momentum = 0.9
+        renorm_momentum = 0.8
+
+        # Custom initial values (non-default)
+        init_moving_mean = np.array([1.0, -2.0, 0.5], dtype="float32")
+        init_moving_var = np.array([2.0, 3.0, 0.5], dtype="float32")
+        init_moving_stddev = np.sqrt(init_moving_var)
+        init_renorm_mean = np.array([0.5, -1.0, 1.0], dtype="float32")
+        init_renorm_stddev = np.array([1.5, 2.0, 0.8], dtype="float32")
+        init_gamma = np.array([1.2, 0.8, 1.5], dtype="float32")
+        init_beta = np.array([0.1, -0.1, 0.2], dtype="float32")
+
+        # Create layer
         layer = layers.BatchNormalization(
             axis=-1,
+            epsilon=epsilon,
+            momentum=momentum,
             renorm=True,
-            renorm_momentum=0.99,  # High momentum to keep renorm stats stable
+            renorm_momentum=renorm_momentum,
         )
+        layer.build((None, 3))
 
-        # Create input with non-zero mean and non-unit variance
+        # Assign custom initial values
+        layer.moving_mean.assign(init_moving_mean)
+        layer.moving_variance.assign(init_moving_var)
+        layer.moving_stddev.assign(init_moving_stddev)
+        layer.renorm_mean.assign(init_renorm_mean)
+        layer.renorm_stddev.assign(init_renorm_stddev)
+        layer.gamma.assign(init_gamma)
+        layer.beta.assign(init_beta)
+
+        # Input data
         x = np.array(
-            [[10.0, 20.0, 30.0], [15.0, 25.0, 35.0]], dtype="float32"
+            [[4.0, 6.0, 2.0], [8.0, -2.0, 5.0], [6.0, 4.0, 3.0]],
+            dtype="float32",
         )
 
-        # First call - output should approximately equal input
-        # (renorm "undoes" the normalization)
-        out_first = layer(x, training=True)
-        out_first_np = backend.convert_to_numpy(out_first)
+        # Manually compute expected output
+        # Step 1: Compute batch statistics
+        batch_mean = np.mean(x, axis=0)  # [6.0, 2.667, 3.333]
+        batch_var = np.var(x, axis=0)  # population variance
+        batch_stddev = np.sqrt(batch_var + epsilon)
 
-        # The output should be close to the input on the first call
-        self.assertAllClose(out_first_np, x, atol=1e-5)
+        # Step 2: Normalize
+        x_norm = (x - batch_mean) / batch_stddev
 
-        # After renorm stats converge to batch stats (with momentum=0),
-        # the output should be normalized (zero mean, unit variance)
-        layer2 = layers.BatchNormalization(
-            axis=-1,
-            renorm=True,
-            renorm_momentum=0.0,  # Immediate update
+        # Step 3: Compute r and d (no clipping)
+        r = batch_stddev / init_renorm_stddev
+        d = (batch_mean - init_renorm_mean) / init_renorm_stddev
+
+        # Step 4: Apply renorm correction then gamma/beta
+        # output = (x_norm * r + d) * gamma + beta
+        expected_output = (x_norm * r + d) * init_gamma + init_beta
+
+        # Run the layer
+        actual_output = layer(x, training=True)
+        actual_output_np = backend.convert_to_numpy(actual_output)
+
+        # Verify output
+        self.assertAllClose(actual_output_np, expected_output, atol=1e-5)
+
+        # Verify moving statistics updates
+        # renorm_mean_new = renorm_mean * renorm_momentum
+        #                   + batch_mean * (1 - renorm_momentum)
+        expected_renorm_mean = (
+            init_renorm_mean * renorm_momentum
+            + batch_mean * (1 - renorm_momentum)
+        )
+        self.assertAllClose(
+            backend.convert_to_numpy(layer.renorm_mean),
+            expected_renorm_mean,
+            atol=1e-5,
         )
 
-        # Call once to set renorm stats = batch stats
-        _ = layer2(x, training=True)
+        # renorm_stddev_new = renorm_stddev * renorm_momentum
+        #                     + batch_stddev * (1 - renorm_momentum)
+        expected_renorm_stddev = (
+            init_renorm_stddev * renorm_momentum
+            + batch_stddev * (1 - renorm_momentum)
+        )
+        self.assertAllClose(
+            backend.convert_to_numpy(layer.renorm_stddev),
+            expected_renorm_stddev,
+            atol=1e-5,
+        )
 
-        # Second call - now renorm stats match batch stats, so r=1, d=0
-        # Output should be normalized
-        out_second = layer2(x, training=True)
-        out_second_np = backend.convert_to_numpy(out_second)
+        # moving_mean_new = moving_mean * momentum
+        #                   + batch_mean * (1 - momentum)
+        expected_moving_mean = (
+            init_moving_mean * momentum + batch_mean * (1 - momentum)
+        )
+        self.assertAllClose(
+            backend.convert_to_numpy(layer.moving_mean),
+            expected_moving_mean,
+            atol=1e-5,
+        )
 
-        # Check normalized output has zero mean and unit variance per feature
-        out_mean = np.mean(out_second_np, axis=0)
-        out_std = np.std(out_second_np, axis=0)
-        self.assertAllClose(out_mean, np.zeros(3), atol=1e-5)
-        self.assertAllClose(out_std, np.ones(3), atol=1e-3)
+        # moving_stddev_new = moving_stddev * momentum
+        #                     + batch_stddev * (1 - momentum)
+        expected_moving_stddev = (
+            init_moving_stddev * momentum + batch_stddev * (1 - momentum)
+        )
+        self.assertAllClose(
+            backend.convert_to_numpy(layer.moving_stddev),
+            expected_moving_stddev,
+            atol=1e-5,
+        )
+
+        # moving_variance is derived from moving_stddev
+        # moving_variance = moving_stddev^2 - epsilon
+        expected_moving_var = expected_moving_stddev**2 - epsilon
+        self.assertAllClose(
+            backend.convert_to_numpy(layer.moving_variance),
+            expected_moving_var,
+            atol=1e-5,
+        )
 
     def test_renorm_clipping_effect(self):
         # Test that clipping is applied correctly
