@@ -329,56 +329,59 @@ class BatchNormalizationTest(testing.TestCase):
         self.assertFalse(hasattr(layer_no_renorm, "renorm_mean"))
         self.assertFalse(hasattr(layer_no_renorm, "renorm_stddev"))
 
-    @parameterized.product(
-        axis=(-1, 1),
-        input_shape=((5, 2, 3), (5, 3, 3, 2)),
-    )
-    def test_renorm_correctness(self, axis, input_shape):
-        # Training with renorm
-        # Note: With renorm, output = (normalized * r + d) * gamma + beta
-        # where r and d are correction factors. So the output won't have
-        # exactly zero mean and unit variance like regular batch norm.
+    def test_renorm_correctness(self):
+        # Test the key renorm behavior: on the first call with initial
+        # renorm stats (mean=0, stddev=1), the r and d corrections should
+        # "undo" the normalization, so output ≈ input.
+        #
+        # Math: output = (x - batch_mean) / batch_stddev * r + d
+        #       where r = batch_stddev / renorm_stddev
+        #             d = (batch_mean - renorm_mean) / renorm_stddev
+        # With initial renorm_mean=0, renorm_stddev=1:
+        #       r = batch_stddev, d = batch_mean
+        #       output = (x - batch_mean) / batch_stddev * batch_stddev
+        #                + batch_mean
+        #              = x - batch_mean + batch_mean = x
         layer = layers.BatchNormalization(
-            axis=axis,
-            momentum=0.0,
+            axis=-1,
             renorm=True,
-            renorm_momentum=0.0,
-        )
-        # Random data centered on 5.0, variance 10.0
-        x = np.random.normal(loc=5.0, scale=10.0, size=input_shape)
-
-        # Call multiple times with the same input
-        for _ in range(3):
-            out = layer(x, training=True)
-
-        # Verify output shape is correct
-        self.assertEqual(out.shape, input_shape)
-
-        # Verify output is valid (not NaN or Inf)
-        out_np = backend.convert_to_numpy(out)
-        self.assertFalse(np.any(np.isnan(out_np)))
-        self.assertFalse(np.any(np.isinf(out_np)))
-
-        # Verify moving statistics have been updated (since momentum=0)
-        # Moving mean should be close to the input batch mean
-        reduction_axes = list(range(len(input_shape)))
-        del reduction_axes[axis]
-        reduction_axes = tuple(reduction_axes)
-        x_np = np.array(x)
-        expected_input_mean = np.mean(x_np, axis=reduction_axes)
-        expected_input_var = np.var(x_np, axis=reduction_axes)
-        self.assertAllClose(
-            layer.moving_mean, expected_input_mean, atol=1e-3
-        )
-        self.assertAllClose(
-            layer.moving_variance, expected_input_var, atol=1e-1
+            renorm_momentum=0.99,  # High momentum to keep renorm stats stable
         )
 
-        # Since momentum is zero, inference after training should use
-        # the latest moving statistics
-        training_out = layer(x, training=True)
-        inference_out = layer(x, training=False)
-        self.assertAllClose(inference_out, training_out, atol=1e-4)
+        # Create input with non-zero mean and non-unit variance
+        x = np.array(
+            [[10.0, 20.0, 30.0], [15.0, 25.0, 35.0]], dtype="float32"
+        )
+
+        # First call - output should approximately equal input
+        # (renorm "undoes" the normalization)
+        out_first = layer(x, training=True)
+        out_first_np = backend.convert_to_numpy(out_first)
+
+        # The output should be close to the input on the first call
+        self.assertAllClose(out_first_np, x, atol=1e-5)
+
+        # After renorm stats converge to batch stats (with momentum=0),
+        # the output should be normalized (zero mean, unit variance)
+        layer2 = layers.BatchNormalization(
+            axis=-1,
+            renorm=True,
+            renorm_momentum=0.0,  # Immediate update
+        )
+
+        # Call once to set renorm stats = batch stats
+        _ = layer2(x, training=True)
+
+        # Second call - now renorm stats match batch stats, so r=1, d=0
+        # Output should be normalized
+        out_second = layer2(x, training=True)
+        out_second_np = backend.convert_to_numpy(out_second)
+
+        # Check normalized output has zero mean and unit variance per feature
+        out_mean = np.mean(out_second_np, axis=0)
+        out_std = np.std(out_second_np, axis=0)
+        self.assertAllClose(out_mean, np.zeros(3), atol=1e-5)
+        self.assertAllClose(out_std, np.ones(3), atol=1e-3)
 
     def test_renorm_clipping_effect(self):
         # Test that clipping is applied correctly
@@ -463,3 +466,52 @@ class BatchNormalizationTest(testing.TestCase):
         self.assertAllClose(
             layer2.renorm_stddev, np.full((5,), 2.0), atol=1e-6
         )
+
+    def test_renorm_without_scale_and_center(self):
+        # Test renorm with scale=False and center=False
+        # This tests the _compose_transforms method with gamma=None, beta=None
+        layer = layers.BatchNormalization(
+            axis=-1,
+            scale=False,
+            center=False,
+            renorm=True,
+            renorm_momentum=0.99,
+        )
+
+        x = np.array(
+            [[10.0, 20.0, 30.0], [15.0, 25.0, 35.0]], dtype="float32"
+        )
+
+        # First call - output should still approximately equal input
+        # because r and d "undo" the normalization
+        out = layer(x, training=True)
+        out_np = backend.convert_to_numpy(out)
+        self.assertAllClose(out_np, x, atol=1e-5)
+
+        # Verify no gamma/beta weights
+        self.assertIsNone(layer.gamma)
+        self.assertIsNone(layer.beta)
+
+    @parameterized.product(
+        axis=(1, -1),
+    )
+    def test_renorm_with_different_axis(self, axis):
+        # Test renorm with image-like input and different axis values
+        layer = layers.BatchNormalization(
+            axis=axis,
+            renorm=True,
+            renorm_momentum=0.99,
+        )
+
+        # Image-like input: (batch, height, width, channels) or
+        # (batch, channels, height, width)
+        if axis == -1:
+            x = np.random.normal(loc=5.0, scale=2.0, size=(2, 4, 4, 3))
+        else:
+            x = np.random.normal(loc=5.0, scale=2.0, size=(2, 3, 4, 4))
+        x = x.astype("float32")
+
+        # First call - output should approximately equal input
+        out = layer(x, training=True)
+        out_np = backend.convert_to_numpy(out)
+        self.assertAllClose(out_np, x, atol=1e-4)

@@ -1,160 +1,200 @@
-"""Compare Keras 2 (tf.keras) and Keras 3 batch renormalization implementations."""
+"""Compare Keras 2 (tf.keras) and Keras 3 batch renormalization implementations.
+
+This script tests with:
+1. Custom initial values for moving statistics
+2. Multiple different batches during training
+3. Various configurations (with/without clipping, different momentum values)
+"""
 
 import numpy as np
 
 # Set random seed for reproducibility
 np.random.seed(42)
 
-# Create test input
-x = np.random.normal(loc=5.0, scale=3.0, size=(4, 8)).astype("float32")
+# Create multiple different batches (10 batches with varying statistics)
+batch1 = np.random.normal(loc=5.0, scale=3.0, size=(4, 8)).astype("float32")
+batch2 = np.random.normal(loc=-2.0, scale=5.0, size=(4, 8)).astype("float32")
+batch3 = np.random.normal(loc=10.0, scale=1.0, size=(4, 8)).astype("float32")
+batch4 = np.random.normal(loc=0.0, scale=10.0, size=(4, 8)).astype("float32")
+batch5 = np.random.normal(loc=-5.0, scale=2.0, size=(4, 8)).astype("float32")
+batch6 = np.random.normal(loc=15.0, scale=0.5, size=(4, 8)).astype("float32")
+batch7 = np.random.normal(loc=1.0, scale=8.0, size=(4, 8)).astype("float32")
+batch8 = np.random.normal(loc=-10.0, scale=4.0, size=(4, 8)).astype("float32")
+batch9 = np.random.normal(loc=3.0, scale=6.0, size=(4, 8)).astype("float32")
+batch10 = np.random.normal(loc=0.0, scale=1.0, size=(4, 8)).astype("float32")
 
-print("=" * 60)
-print("Comparing Keras 2 (tf.keras) vs Keras 3 Batch Renormalization")
-print("=" * 60)
-print(f"\nInput shape: {x.shape}")
-print(f"Input mean: {x.mean():.4f}, std: {x.std():.4f}")
-
-# ============== Keras 2 (tf.keras) ==============
-print("\n" + "=" * 60)
-print("Keras 2 (tf.keras) Implementation")
-print("=" * 60)
+# Custom initial values (non-default)
+init_moving_mean = np.array([1.0, -1.0, 2.0, -2.0, 0.5, -0.5, 1.5, -1.5], dtype="float32")
+init_moving_variance = np.array([2.0, 3.0, 1.5, 2.5, 4.0, 0.5, 1.0, 3.5], dtype="float32")
+init_moving_stddev = np.sqrt(init_moving_variance)
+init_gamma = np.array([1.2, 0.8, 1.0, 1.5, 0.9, 1.1, 1.3, 0.7], dtype="float32")
+init_beta = np.array([0.1, -0.1, 0.2, -0.2, 0.0, 0.3, -0.3, 0.15], dtype="float32")
 
 import tensorflow as tf
-
-tf_layer = tf.keras.layers.BatchNormalization(
-    renorm=True,
-    renorm_clipping={"rmax": 3.0, "rmin": 0.3, "dmax": 5.0},
-    renorm_momentum=0.99,
-    momentum=0.99,
-)
-
-# Build the layer
-tf_layer.build((None, 8))
-
-print("\nInitial state (Keras 2):")
-print(f"  moving_mean: {tf_layer.moving_mean.numpy()}")
-print(f"  moving_variance: {tf_layer.moving_variance.numpy()}")
-print(f"  renorm_mean: {tf_layer.renorm_mean.numpy()}")
-print(f"  renorm_stddev: {tf_layer.renorm_stddev.numpy()}")
-
-# Training pass 1
-tf_out1 = tf_layer(x, training=True)
-print("\nAfter training pass 1 (Keras 2):")
-print(f"  Output mean: {tf_out1.numpy().mean():.6f}")
-print(f"  Output std: {tf_out1.numpy().std():.6f}")
-print(f"  moving_mean: {tf_layer.moving_mean.numpy()}")
-print(f"  moving_variance: {tf_layer.moving_variance.numpy()}")
-print(f"  renorm_mean: {tf_layer.renorm_mean.numpy()}")
-print(f"  renorm_stddev: {tf_layer.renorm_stddev.numpy()}")
-
-# Training pass 2
-tf_out2 = tf_layer(x, training=True)
-print("\nAfter training pass 2 (Keras 2):")
-print(f"  Output mean: {tf_out2.numpy().mean():.6f}")
-print(f"  Output std: {tf_out2.numpy().std():.6f}")
-print(f"  moving_mean: {tf_layer.moving_mean.numpy()}")
-print(f"  moving_variance: {tf_layer.moving_variance.numpy()}")
-
-# Inference pass
-tf_out_inf = tf_layer(x, training=False)
-print("\nInference output (Keras 2):")
-print(f"  Output mean: {tf_out_inf.numpy().mean():.6f}")
-print(f"  Output std: {tf_out_inf.numpy().std():.6f}")
-
-# Store Keras 2 results
-keras2_out1 = tf_out1.numpy()
-keras2_out2 = tf_out2.numpy()
-keras2_out_inf = tf_out_inf.numpy()
-keras2_moving_mean = tf_layer.moving_mean.numpy().copy()
-keras2_moving_var = tf_layer.moving_variance.numpy().copy()
-keras2_renorm_mean = tf_layer.renorm_mean.numpy().copy()
-keras2_renorm_stddev = tf_layer.renorm_stddev.numpy().copy()
-
-# ============== Keras 3 ==============
-print("\n" + "=" * 60)
-print("Keras 3 Implementation")
-print("=" * 60)
-
-# Import Keras 3
 import keras
 from keras.src.layers.normalization.batch_normalization import BatchNormalization
 
-k3_layer = BatchNormalization(
-    renorm=True,
-    renorm_clipping={"rmax": 3.0, "rmin": 0.3, "dmax": 5.0},
-    renorm_momentum=0.99,
-    momentum=0.99,
-)
-
-# Build the layer
-k3_layer.build((None, 8))
-
-print("\nInitial state (Keras 3):")
-print(f"  moving_mean: {np.array(k3_layer.moving_mean)}")
-print(f"  moving_variance: {np.array(k3_layer.moving_variance)}")
-print(f"  renorm_mean: {np.array(k3_layer.renorm_mean)}")
-print(f"  renorm_stddev: {np.array(k3_layer.renorm_stddev)}")
-
-# Training pass 1
-k3_out1 = k3_layer(x, training=True)
-k3_out1_np = np.array(k3_out1)
-print("\nAfter training pass 1 (Keras 3):")
-print(f"  Output mean: {k3_out1_np.mean():.6f}")
-print(f"  Output std: {k3_out1_np.std():.6f}")
-print(f"  moving_mean: {np.array(k3_layer.moving_mean)}")
-print(f"  moving_variance: {np.array(k3_layer.moving_variance)}")
-print(f"  renorm_mean: {np.array(k3_layer.renorm_mean)}")
-print(f"  renorm_stddev: {np.array(k3_layer.renorm_stddev)}")
-
-# Training pass 2
-k3_out2 = k3_layer(x, training=True)
-k3_out2_np = np.array(k3_out2)
-print("\nAfter training pass 2 (Keras 3):")
-print(f"  Output mean: {k3_out2_np.mean():.6f}")
-print(f"  Output std: {k3_out2_np.std():.6f}")
-print(f"  moving_mean: {np.array(k3_layer.moving_mean)}")
-print(f"  moving_variance: {np.array(k3_layer.moving_variance)}")
-
-# Inference pass
-k3_out_inf = k3_layer(x, training=False)
-k3_out_inf_np = np.array(k3_out_inf)
-print("\nInference output (Keras 3):")
-print(f"  Output mean: {k3_out_inf_np.mean():.6f}")
-print(f"  Output std: {k3_out_inf_np.std():.6f}")
-
-# Store Keras 3 results
-keras3_moving_mean = np.array(k3_layer.moving_mean)
-keras3_moving_var = np.array(k3_layer.moving_variance)
-keras3_renorm_mean = np.array(k3_layer.renorm_mean)
-keras3_renorm_stddev = np.array(k3_layer.renorm_stddev)
-
-# ============== Comparison ==============
-print("\n" + "=" * 60)
-print("COMPARISON")
-print("=" * 60)
 
 def compare(name, keras2_val, keras3_val, atol=1e-5):
     diff = np.abs(keras2_val - keras3_val).max()
     match = diff < atol
     status = "✓ MATCH" if match else "✗ MISMATCH"
-    print(f"{name}: {status} (max diff: {diff:.8f})")
+    print(f"  {name}: {status} (max diff: {diff:.8f})")
     if not match:
-        print(f"  Keras 2: {keras2_val}")
-        print(f"  Keras 3: {keras3_val}")
+        print(f"    Keras 2: {keras2_val.flatten()[:4]}...")
+        print(f"    Keras 3: {keras3_val.flatten()[:4]}...")
     return match
 
-all_match = True
-all_match &= compare("Training output 1", keras2_out1, k3_out1_np)
-all_match &= compare("Training output 2", keras2_out2, k3_out2_np)
-all_match &= compare("Inference output", keras2_out_inf, k3_out_inf_np)
-all_match &= compare("moving_mean", keras2_moving_mean, keras3_moving_mean)
-all_match &= compare("moving_variance", keras2_moving_var, keras3_moving_var)
-all_match &= compare("renorm_mean", keras2_renorm_mean, keras3_renorm_mean)
-all_match &= compare("renorm_stddev", keras2_renorm_stddev, keras3_renorm_stddev)
 
-print("\n" + "=" * 60)
-if all_match:
-    print("SUCCESS: All outputs match between Keras 2 and Keras 3!")
+def run_comparison(
+    test_name,
+    renorm_clipping,
+    momentum,
+    renorm_momentum,
+    use_custom_init=True,
+):
+    print("\n" + "=" * 70)
+    print(f"TEST: {test_name}")
+    print("=" * 70)
+    print(f"  renorm_clipping: {renorm_clipping}")
+    print(f"  momentum: {momentum}, renorm_momentum: {renorm_momentum}")
+    print(f"  use_custom_init: {use_custom_init}")
+
+    # ============== Keras 2 (tf.keras) ==============
+    tf_layer = tf.keras.layers.BatchNormalization(
+        renorm=True,
+        renorm_clipping=renorm_clipping,
+        renorm_momentum=renorm_momentum,
+        momentum=momentum,
+    )
+    tf_layer.build((None, 8))
+
+    # Set custom initial values
+    if use_custom_init:
+        tf_layer.moving_mean.assign(init_moving_mean)
+        tf_layer.moving_variance.assign(init_moving_variance)
+        tf_layer.moving_stddev.assign(init_moving_stddev)
+        tf_layer.renorm_mean.assign(init_moving_mean)
+        tf_layer.renorm_stddev.assign(init_moving_stddev)
+        tf_layer.gamma.assign(init_gamma)
+        tf_layer.beta.assign(init_beta)
+
+    # ============== Keras 3 ==============
+    k3_layer = BatchNormalization(
+        renorm=True,
+        renorm_clipping=renorm_clipping,
+        renorm_momentum=renorm_momentum,
+        momentum=momentum,
+    )
+    k3_layer.build((None, 8))
+
+    # Set custom initial values
+    if use_custom_init:
+        k3_layer.moving_mean.assign(init_moving_mean)
+        k3_layer.moving_variance.assign(init_moving_variance)
+        k3_layer.moving_stddev.assign(init_moving_stddev)
+        k3_layer.renorm_mean.assign(init_moving_mean)
+        k3_layer.renorm_stddev.assign(init_moving_stddev)
+        k3_layer.gamma.assign(init_gamma)
+        k3_layer.beta.assign(init_beta)
+
+    all_match = True
+
+    # Training with multiple batches
+    batches = [batch1, batch2, batch3, batch4, batch5, batch6, batch7, batch8, batch9, batch10]
+    for i, batch in enumerate(batches):
+        tf_out = tf_layer(batch, training=True)
+        k3_out = k3_layer(batch, training=True)
+
+        print(f"\n  After batch {i+1} (mean={batch.mean():.2f}, std={batch.std():.2f}):")
+        all_match &= compare(f"output", np.asarray(tf_out), np.asarray(k3_out))
+        all_match &= compare(
+            f"moving_mean", np.asarray(tf_layer.moving_mean), np.asarray(k3_layer.moving_mean)
+        )
+        all_match &= compare(
+            f"moving_var",
+            np.asarray(tf_layer.moving_variance),
+            np.asarray(k3_layer.moving_variance),
+        )
+        all_match &= compare(
+            f"renorm_mean", np.asarray(tf_layer.renorm_mean), np.asarray(k3_layer.renorm_mean)
+        )
+        all_match &= compare(
+            f"renorm_stddev",
+            np.asarray(tf_layer.renorm_stddev),
+            np.asarray(k3_layer.renorm_stddev),
+        )
+
+    # Inference pass
+    print("\n  Inference mode:")
+    for i, batch in enumerate(batches[:2]):
+        tf_out_inf = tf_layer(batch, training=False)
+        k3_out_inf = k3_layer(batch, training=False)
+        all_match &= compare(
+            f"inference batch {i+1}", np.asarray(tf_out_inf), np.asarray(k3_out_inf)
+        )
+
+    return all_match
+
+
+# Run multiple test configurations
+print("=" * 70)
+print("Comparing Keras 2 (tf.keras) vs Keras 3 Batch Renormalization")
+print("=" * 70)
+
+all_tests_pass = True
+
+# Test 1: With clipping, custom init
+all_tests_pass &= run_comparison(
+    test_name="With clipping, custom init",
+    renorm_clipping={"rmax": 3.0, "rmin": 0.3, "dmax": 5.0},
+    momentum=0.99,
+    renorm_momentum=0.99,
+    use_custom_init=True,
+)
+
+# Test 2: No clipping, custom init
+all_tests_pass &= run_comparison(
+    test_name="No clipping, custom init",
+    renorm_clipping={},
+    momentum=0.99,
+    renorm_momentum=0.99,
+    use_custom_init=True,
+)
+
+# Test 3: Different momentum values
+all_tests_pass &= run_comparison(
+    test_name="Low momentum (fast update)",
+    renorm_clipping={"rmax": 2.0, "dmax": 3.0},
+    momentum=0.5,
+    renorm_momentum=0.8,
+    use_custom_init=True,
+)
+
+# Test 4: Zero momentum (immediate update)
+all_tests_pass &= run_comparison(
+    test_name="Zero momentum",
+    renorm_clipping={},
+    momentum=0.0,
+    renorm_momentum=0.0,
+    use_custom_init=True,
+)
+
+# Test 5: Default init (zeros/ones)
+all_tests_pass &= run_comparison(
+    test_name="Default init (zeros/ones)",
+    renorm_clipping={"rmax": 3.0, "rmin": 0.3, "dmax": 5.0},
+    momentum=0.99,
+    renorm_momentum=0.99,
+    use_custom_init=False,
+)
+
+# Final summary
+print("\n" + "=" * 70)
+print("FINAL SUMMARY")
+print("=" * 70)
+if all_tests_pass:
+    print("✓ SUCCESS: All tests passed! Keras 2 and Keras 3 match perfectly.")
 else:
-    print("FAILURE: Some outputs differ between Keras 2 and Keras 3!")
-print("=" * 60)
+    print("✗ FAILURE: Some tests failed! There are differences between implementations.")
+print("=" * 70)

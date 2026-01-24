@@ -534,6 +534,9 @@ class BatchNormalization(Layer):
         )
 
         # Update inference moving statistics.
+        # We track moving_stddev and derive moving_variance from it, matching
+        # the Keras 2 implementation. The epsilon is included in moving_stddev
+        # to mirror the training code path.
         moving_mean = ops.cast(self.moving_mean, mean.dtype)
         moving_stddev = ops.cast(self.moving_stddev, mean.dtype)
 
@@ -541,14 +544,13 @@ class BatchNormalization(Layer):
             moving_mean * self.momentum + mean * (1.0 - self.momentum)
         )
 
-        # Update moving_stddev, then compute moving_variance from it.
         new_moving_stddev = (
             moving_stddev * self.momentum + stddev * (1.0 - self.momentum)
         )
         self.moving_stddev.assign(new_moving_stddev)
 
-        # Apply relu in case floating point rounding causes it to go negative.
-        new_moving_variance = ops.maximum(
-            new_moving_stddev * new_moving_stddev - self.epsilon, 0.0
+        # Derive moving_variance from moving_stddev, applying relu in case
+        # floating point rounding causes it to go negative.
+        self.moving_variance.assign(
+            ops.relu(new_moving_stddev * new_moving_stddev - self.epsilon)
         )
-        self.moving_variance.assign(new_moving_variance)
