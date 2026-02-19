@@ -1223,7 +1223,7 @@ def dot_product_attention(
             attn_mask=mask,
             is_causal=is_causal,
             scale=scale,
-            # enable_gqa=enable_gqa,
+            enable_gqa=enable_gqa,
         )
     return torch.transpose(attention_output, axis1, axis0)
 
