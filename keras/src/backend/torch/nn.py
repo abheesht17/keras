@@ -1205,6 +1205,13 @@ def dot_product_attention(
     else:
         if mask is not None:
             mask = mask.contiguous()
+
+        enable_gqa = False
+        num_query_heads = query.shape[-3]
+        num_kv_heads = key.shape[-3]
+        if num_query_heads != num_kv_heads and num_query_heads % num_kv_heads == 0:
+            enable_gqa = True
+
         attention_output = torch.nn.functional.scaled_dot_product_attention(
             query.contiguous(),
             key.contiguous(),
@@ -1212,6 +1219,7 @@ def dot_product_attention(
             attn_mask=mask,
             is_causal=is_causal,
             scale=scale,
+            enable_gqa=enable_gqa,
         )
     return torch.transpose(attention_output, axis1, axis0)
 
