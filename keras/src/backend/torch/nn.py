@@ -1206,11 +1206,15 @@ def dot_product_attention(
         if mask is not None:
             mask = mask.contiguous()
 
+        print(f"{query.shape=}")
+        print(f"{key.shape=}")
+        print(f"{value.shape=}")
         enable_gqa = False
         num_query_heads = query.shape[-3]
         num_kv_heads = key.shape[-3]
         if num_query_heads != num_kv_heads and num_query_heads % num_kv_heads == 0:
             enable_gqa = True
+        print(f"{enable_gqa=}")
 
         attention_output = torch.nn.functional.scaled_dot_product_attention(
             query.contiguous(),
