@@ -984,6 +984,8 @@ def _distribute_data(data, layouts=None):
     distribution = distribution_lib.distribution()
 
     if distribution is not None:
+        # print(f"--->{distribution=}")
+        # print(f"--->{layouts=}")
         if layouts is None:
             layouts = tree.map_structure(
                 lambda d: distribution.get_data_layout(d.shape),
@@ -1015,16 +1017,21 @@ class JAXEpochIterator(EpochIterator):
 
     def _get_distributed_iterator(self, distribution):
         """Lazily compute layouts to reduce host to device transfer latency."""
-        layouts = None
         for data in self.data_adapter.get_jax_iterator():
-            if layouts is None:
-                layouts = tree.map_structure(
-                    lambda d: distribution.get_data_layout(
-                        d.shape
-                    ).backend_layout,
-                    data,
-                )
-            yield _distribute_data(data, layouts)
+            yield data
+        # print("--->Enter _get_distributed_iterator")
+        # layouts = None
+        # print(f"--->{self.data_adapter=}")
+        # for data in self.data_adapter.get_jax_iterator():
+        #     if layouts is None:
+        #         layouts = tree.map_structure(
+        #             lambda d: distribution.get_data_layout(
+        #                 d.shape
+        #             ).backend_layout,
+        #             data,
+        #         )
+        #     yield _distribute_data(data, layouts)
+        #     # yield data
 
     def _prefetch_numpy_iterator(self, numpy_iterator):
         """Shard and prefetch batches on device.
